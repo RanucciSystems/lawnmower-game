@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mow the Field</title>
+<style>
+  :root {
+    --bg: #1b1f16;
+    --panel: rgba(20, 24, 16, 0.85);
+    --text: #e8f0dc;
+    --accent: #9be36a;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: var(--bg); color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  canvas { display: block; width: 100vw; height: 100vh; image-rendering: pixelated; }
+  #hud {
+    position: fixed; top: 12px; left: 12px;
+    background: var(--panel); border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 10px; padding: 10px 14px; min-width: 240px;
+    font-size: 14px; line-height: 1.5; pointer-events: none;
+  }
+  #hud .pct { font-size: 28px; font-weight: 700; color: var(--accent); }
+  #bar { height: 8px; background: rgba(255,255,255,0.1); border-radius: 4px; overflow: hidden; margin: 6px 0 4px; }
+  #barFill { height: 100%; width: 0; background: var(--accent); transition: width .15s linear; }
+  #help {
+    position: fixed; bottom: 12px; left: 12px;
+    background: var(--panel); border-radius: 10px; padding: 8px 12px;
+    font-size: 12px; opacity: .85; pointer-events: none;
+  }
+  #minimap {
+    position: fixed; top: 12px; right: 12px;
+    border: 2px solid rgba(255,255,255,0.25); border-radius: 6px;
+    image-rendering: pixelated; background: #000;
+  }
+  #done {
+    position: fixed; inset: 0; display: none; place-items: center;
+    background: rgba(0,0,0,0.55); text-align: center;
+  }
+  #done .card {
+    background: var(--panel); border-radius: 14px; padding: 28px 36px;
+    border: 1px solid rgba(255,255,255,0.1);
+  }
+  #done h1 { margin: 0 0 8px; color: var(--accent); }
+  #done button {
+    margin-top: 14px; padding: 10px 18px; font-size: 16px; cursor: pointer;
+    background: var(--accent); color: #142; border: 0; border-radius: 8px; font-weight: 700;
+  }
+  kbd {
+    background: rgba(255,255,255,0.12); border-radius: 4px; padding: 1px 5px;
+    font-family: inherit; font-size: 11px;
+  }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<canvas id="minimap" width="160" height="120"></canvas>
+
+<div id="hud">
+  <div>Field mowed</div>
+  <div class="pct"><span id="pct">0.0</span>%</div>
+  <div id="bar"><div id="barFill"></div></div>
+  <div><span id="cells">0</span> / <span id="total">0</span> patches</div>
+  <div>Time <span id="time">0:00</span></div>
+</div>
+
+<div id="help">
+  <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or <kbd>↑</kbd><kbd>←</kbd><kbd>↓</kbd><kbd>→</kbd> to drive ·
+  <kbd>Shift</kbd> boost · <kbd>R</kbd> restart
+</div>
+
+<div id="done">
+  <div class="card">
+    <h1>Field cleared!</h1>
+    <div>You mowed the whole farm in <strong id="finalTime">0:00</strong>.</div>
+    <button id="again">Mow again</button>
+  </div>
+</div>
+
+<script>
+(() => {
+  'use strict';
+
+  // ---------- Config ----------
+  const TILE = 8;                  // world pixels per grass cell
+  const COLS = 320, ROWS = 240;    // field size in cells (a "large farm field")
+  const WORLD_W = COLS * TILE, WORLD_H = ROWS * TILE;
+  const MOWER_SPEED = 170;         // px/s
+  const BOOST_MULT = 1.7;
+  const TURN_SPEED = 3.6;          // rad/s
+  const DECK_RADIUS = 14;          // cutting deck radius in world px
+  const ZOOM = 2;                  // render scale
+
+  // ---------- Canvas setup ----------
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const mini = document.getElementById('minimap');
+  const mctx = mini.getContext('2d');
+  mini.width = COLS; mini.height = ROWS;
+  mini.style.width = '240px';
+  mini.style.height = '180px';
+
+  function resize() {
+    canvas.width = Math.floor(window.innerWidth / ZOOM);
+    canvas.height = Math.floor(window.innerHeight / ZOOM);
+    canvas.style.width = window.innerWidth + 'px';
+    canvas.style.height = window.innerHeight + 'px';
+    ctx.imageSmoothingEnabled = false;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // ---------- Field state ----------
+  // 0 = cut, 1 = tall grass. Also keep a per-cell seed for visual variety.
+  const grass = new Uint8Array(COLS * ROWS);
+  const seed = new Uint8Array(COLS * ROWS);
+  let cutCount = 0;
+  const TOTAL = COLS * ROWS;
+
+  // Pre-rendered field layer; redraw only dirty cells for performance.
+  const fieldCanvas = document.createElement('canvas');
+  fieldCanvas.width = WORLD_W; fieldCanvas.height = WORLD_H;
+  const fctx = fieldCanvas.getContext('2d');
+
+  function hash(i) { // tiny deterministic noise
+    let x = (i * 2654435761) >>> 0;
+    x ^= x >>> 13; x = Math.imul(x, 0x5bd1e995) >>> 0; x ^= x >>> 15;
+    return x;
+  }
+
+  function drawCell(c, r) {
+    const i = r * COLS + c;
+    const x = c * TILE, y = r * TILE;
+    const s = seed[i];
+    if (grass[i]) {
+      // Tall overgrown grass: dark green base with lighter blades
+      const shade = 0.85 + (s % 5) * 0.05;
+      fctx.fillStyle = `rgb(${Math.round(46 * shade)},${Math.round(112 * shade)},${Math.round(38 * shade)})`;
+      fctx.fillRect(x, y, TILE, TILE);
+      fctx.strokeStyle = 'rgba(160, 220, 90, 0.55)';
+      fctx.lineWidth = 1;
+      fctx.beginPath();
+      for (let k = 0; k < 2; k++) {
+        const bx = x + 1 + ((s * (k + 3)) % (TILE - 2));
+        const by = y + TILE - 1;
+        const lean = ((s >> k) & 1) ? 1 : -1;
+        fctx.moveTo(bx + 0.5, by);
+        fctx.lineTo(bx + lean + 0.5, by - 4 - (s % 3));
+      }
+      fctx.stroke();
+      // Occasional wildflower
+      if (s % 23 === 0) {
+        fctx.fillStyle = (s & 1) ? '#f5e663' : '#f2f2f2';
+        fctx.fillRect(x + (s % 5) + 1, y + 2 + (s % 3), 2, 2);
+      }
+    } else {
+      // Cut grass: lighter, with subtle mowing-stripe alternation per row
+      const stripe = ((r >> 1) % 2) ? 1.0 : 0.93;
+      const shade = (0.96 + (s % 3) * 0.02) * stripe;
+      fctx.fillStyle = `rgb(${Math.round(120 * shade)},${Math.round(196 * shade)},${Math.round(84 * shade)})`;
+      fctx.fillRect(x, y, TILE, TILE);
+      fctx.fillStyle = 'rgba(0,0,0,0.05)';
+      if (s % 7 === 0) fctx.fillRect(x + (s % TILE), y + (s % 9), 2, 1);
+    }
+  }
+
+  function resetField() {
+    for (let i = 0; i < TOTAL; i++) { grass[i] = 1; seed[i] = hash(i + 17) & 255; }
+    cutCount = 0;
+    for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) drawCell(c, r);
+  }
+
+  // Cut every cell overlapped by the circular deck at (wx, wy)
+  function cutAt(wx, wy) {
+    const rad = DECK_RADIUS;
+    const c0 = Math.max(0, Math.floor((wx - rad) / TILE));
+    const c1 = Math.min(COLS - 1, Math.floor((wx + rad) / TILE));
+    const r0 = Math.max(0, Math.floor((wy - rad) / TILE));
+    const r1 = Math.min(ROWS - 1, Math.floor((wy + rad) / TILE));
+    const r2 = rad * rad;
+    for (let r = r0; r <= r1; r++) {
+      for (let c = c0; c <= c1; c++) {
+        const i = r * COLS + c;
+        if (!grass[i]) continue;
+        // nearest point on the cell to the deck centre
+        const nx = Math.max(c * TILE, Math.min(wx, c * TILE + TILE));
+        const ny = Math.max(r * TILE, Math.min(wy, r * TILE + TILE));
+        const dx = nx - wx, dy = ny - wy;
+        if (dx * dx + dy * dy <= r2) {
+          grass[i] = 0; cutCount++;
+          drawCell(c, r);
+        }
+      }
+    }
+  }
+
+  // ---------- Mower ----------
+  const mower = { x: 0, y: 0, angle: 0, vx: 0, vy: 0 };
+  let elapsed = 0, finished = false, prevX = 0, prevY = 0;
+
+  function resetGame() {
+    resetField();
+    mower.x = 120; mower.y = 120; mower.angle = 0;
+    prevX = mower.x; prevY = mower.y;
+    elapsed = 0; finished = false;
+    document.getElementById('done').style.display = 'none';
+    cutAt(mower.x, mower.y);
+    updateHud();
+  }
+
+  // ---------- Input ----------
+  const keys = new Set();
+  const KEYMAP = {
+    KeyW: 'up', ArrowUp: 'up', KeyS: 'down', ArrowDown: 'down',
+    KeyA: 'left', ArrowLeft: 'left', KeyD: 'right', ArrowRight: 'right',
+    ShiftLeft: 'boost', ShiftRight: 'boost',
+  };
+  window.addEventListener('keydown', e => {
+    if (e.code === 'KeyR') { resetGame(); return; }
+    const k = KEYMAP[e.code];
+    if (k) { keys.add(k); e.preventDefault(); }
+  });
+  window.addEventListener('keyup', e => { const k = KEYMAP[e.code]; if (k) keys.delete(k); });
+  window.addEventListener('blur', () => keys.clear());
+  document.getElementById('again').addEventListener('click', resetGame);
+
+  // ---------- Update ----------
+  function update(dt) {
+    if (!finished) elapsed += dt;
+
+    // Tank-style controls: up/down drive forward/back, left/right steer.
+    let throttle = 0, steer = 0;
+    if (keys.has('up')) throttle += 1;
+    if (keys.has('down')) throttle -= 1;
+    if (keys.has('left')) steer -= 1;
+    if (keys.has('right')) steer += 1;
+
+    // Steering only applies when moving (feels like a real mower); allow pivot when stopped but slower.
+    const steerScale = throttle !== 0 ? 1 : 0.6;
+    mower.angle += steer * TURN_SPEED * steerScale * dt * (throttle < 0 ? -1 : 1);
+
+    const speed = MOWER_SPEED * (keys.has('boost') ? BOOST_MULT : 1) * throttle;
+    mower.x += Math.cos(mower.angle) * speed * dt;
+    mower.y += Math.sin(mower.angle) * speed * dt;
+
+    // Keep inside the field (with fence margin)
+    mower.x = Math.max(DECK_RADIUS, Math.min(WORLD_W - DECK_RADIUS, mower.x));
+    mower.y = Math.max(DECK_RADIUS, Math.min(WORLD_H - DECK_RADIUS, mower.y));
+
+    // Cut along the path travelled this frame so fast movement leaves no gaps
+    const dist = Math.hypot(mower.x - prevX, mower.y - prevY);
+    const steps = Math.max(1, Math.ceil(dist / (DECK_RADIUS * 0.5)));
+    for (let s = 1; s <= steps; s++) {
+      const t = s / steps;
+      cutAt(prevX + (mower.x - prevX) * t, prevY + (mower.y - prevY) * t);
+    }
+    prevX = mower.x; prevY = mower.y;
+
+    if (!finished && cutCount >= TOTAL) {
+      finished = true;
+      document.getElementById('finalTime').textContent = fmtTime(elapsed);
+      document.getElementById('done').style.display = 'grid';
+    }
+  }
+
+  // ---------- Render ----------
+  function render() {
+    const vw = canvas.width, vh = canvas.height;
+    // Camera centred on mower, clamped to world bounds
+    let camX = Math.round(mower.x - vw / 2);
+    let camY = Math.round(mower.y - vh / 2);
+    camX = Math.max(0, Math.min(WORLD_W - vw, camX));
+    camY = Math.max(0, Math.min(WORLD_H - vh, camY));
+    if (WORLD_W < vw) camX = -(vw - WORLD_W) / 2;
+    if (WORLD_H < vh) camY = -(vh - WORLD_H) / 2;
+
+    ctx.fillStyle = '#3b2a1a'; // dirt outside the fence
+    ctx.fillRect(0, 0, vw, vh);
+    ctx.drawImage(fieldCanvas, -camX, -camY);
+
+    // Fence around the field
+    ctx.strokeStyle = '#8b5a2b'; ctx.lineWidth = 3;
+    ctx.strokeRect(-camX + 1.5, -camY + 1.5, WORLD_W - 3, WORLD_H - 3);
+
+    // Mower
+    ctx.save();
+    ctx.translate(mower.x - camX, mower.y - camY);
+    ctx.rotate(mower.angle);
+    // shadow
+    ctx.fillStyle = 'rgba(0,0,0,0.25)';
+    ctx.beginPath(); ctx.ellipse(1, 3, 15, 11, 0, 0, Math.PI * 2); ctx.fill();
+    // cutting deck
+    ctx.fillStyle = '#c62828';
+    ctx.beginPath(); ctx.arc(2, 0, DECK_RADIUS, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#7a1414'; ctx.lineWidth = 2; ctx.stroke();
+    // body / seat
+    ctx.fillStyle = '#e53935'; ctx.fillRect(-10, -7, 16, 14);
+    ctx.fillStyle = '#222'; ctx.fillRect(-9, -5, 7, 10); // seat
+    ctx.fillStyle = '#444'; ctx.fillRect(4, -5, 3, 10);  // steering column
+    // wheels
+    ctx.fillStyle = '#111';
+    ctx.fillRect(-12, -11, 6, 4); ctx.fillRect(-12, 7, 6, 4);
+    ctx.fillRect(8, -10, 5, 3); ctx.fillRect(8, 7, 5, 3);
+    // front marker
+    ctx.fillStyle = '#ffeb3b'; ctx.fillRect(13, -2, 3, 4);
+    ctx.restore();
+  }
+
+  function renderMini() {
+    // Repaint the whole minimap from the grass array (160x120 px, cheap) plus the mower dot.
+    const img = mctx.createImageData(COLS, ROWS);
+    const d = img.data;
+    for (let i = 0; i < TOTAL; i++) {
+      const g = grass[i];
+      d[i * 4] = g ? 0x2e : 0x9b; d[i * 4 + 1] = g ? 0x70 : 0xe3; d[i * 4 + 2] = g ? 0x26 : 0x6a; d[i * 4 + 3] = 255;
+    }
+    mctx.putImageData(img, 0, 0);
+    mctx.fillStyle = '#ff3b3b';
+    mctx.fillRect(Math.floor(mower.x / TILE) - 1, Math.floor(mower.y / TILE) - 1, 3, 3);
+  }
+
+  // ---------- HUD ----------
+  function fmtTime(s) {
+    const m = Math.floor(s / 60), sec = Math.floor(s % 60);
+    return `${m}:${sec.toString().padStart(2, '0')}`;
+  }
+  let lastHud = 0;
+  function updateHud() {
+    const pct = (cutCount / TOTAL) * 100;
+    document.getElementById('pct').textContent = pct.toFixed(1);
+    document.getElementById('barFill').style.width = pct + '%';
+    document.getElementById('cells').textContent = cutCount;
+    document.getElementById('total').textContent = TOTAL;
+    document.getElementById('time').textContent = fmtTime(elapsed);
+  }
+
+  // ---------- Main loop ----------
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    update(dt);
+    render();
+    if (now - lastHud > 100) { updateHud(); renderMini(); lastHud = now; }
+    requestAnimationFrame(frame);
+  }
+
+  resetGame();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
