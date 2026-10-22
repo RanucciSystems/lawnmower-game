@@ -16,6 +16,25 @@ Open `index.html` in any modern browser. No build step or server required.
 | `S` / `↓` | Reverse |
 | `A` / `←`, `D` / `→` | Steer |
 | `Shift` | Boost |
-| `R` | Restart with a fresh field |
+| `R` | Restart with a freshly generated field |
+| `Esc` or ⚙ | Open settings |
 
-Mow 100% of the field to finish. Your time is shown when you clear it.
+Mow 100% of the field to finish. Your time and bump count are shown when you clear it.
+
+## Obstacles
+
+Each field is randomly generated with a pond, trees, rocks and hay bales. Running
+into one at speed counts as a bump and knocks you back, so steer around them.
+Patches under obstacles don't need cutting.
+
+## Mowing stripes
+
+Cut grass is shaded by the direction you were driving when you cut it, so mowing
+back and forth in rows produces the alternating light and dark stripes of a
+real field.
+
+## Settings
+
+The gear icon (or `Esc`) opens a panel where you can adjust steering sensitivity,
+top speed, acceleration, and whether steering inverts while reversing. Settings
+are saved in your browser.

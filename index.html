@@ -7,8 +7,9 @@
 <style>
   :root {
     --bg: #1b1f16;
-    --panel: rgba(20, 24, 16, 0.85);
+    --panel: rgba(20, 24, 16, 0.86);
     --text: #e8f0dc;
+    --muted: #a9b89a;
     --accent: #9be36a;
   }
   * { box-sizing: border-box; }
@@ -17,19 +18,20 @@
     background: var(--bg); color: var(--text);
     font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   }
-  canvas { display: block; width: 100vw; height: 100vh; image-rendering: pixelated; }
-  #hud {
-    position: fixed; top: 12px; left: 12px;
+  canvas#game { display: block; width: 100vw; height: 100vh; image-rendering: pixelated; }
+  .panel {
     background: var(--panel); border: 1px solid rgba(255,255,255,0.08);
-    border-radius: 10px; padding: 10px 14px; min-width: 240px;
+    border-radius: 10px; backdrop-filter: blur(4px);
+  }
+  #hud {
+    position: fixed; top: 12px; left: 12px; padding: 10px 14px; min-width: 240px;
     font-size: 14px; line-height: 1.5; pointer-events: none;
   }
   #hud .pct { font-size: 28px; font-weight: 700; color: var(--accent); }
   #bar { height: 8px; background: rgba(255,255,255,0.1); border-radius: 4px; overflow: hidden; margin: 6px 0 4px; }
   #barFill { height: 100%; width: 0; background: var(--accent); transition: width .15s linear; }
   #help {
-    position: fixed; bottom: 12px; left: 12px;
-    background: var(--panel); border-radius: 10px; padding: 8px 12px;
+    position: fixed; bottom: 12px; left: 12px; padding: 8px 12px;
     font-size: 12px; opacity: .85; pointer-events: none;
   }
   #minimap {
@@ -37,14 +39,34 @@
     border: 2px solid rgba(255,255,255,0.25); border-radius: 6px;
     image-rendering: pixelated; background: #000;
   }
+  #gear {
+    position: fixed; right: 12px; top: 206px; width: 40px; height: 40px;
+    border-radius: 10px; cursor: pointer; display: grid; place-items: center;
+    font-size: 20px; color: var(--text); user-select: none;
+  }
+  #gear:hover { background: rgba(40, 48, 32, 0.95); }
+  #settings {
+    position: fixed; right: 12px; top: 254px; width: 260px; padding: 12px 14px;
+    display: none; font-size: 13px;
+  }
+  #settings.open { display: block; }
+  #settings h3 { margin: 0 0 10px; font-size: 14px; color: var(--accent); }
+  #settings label { display: block; margin-top: 10px; color: var(--muted); }
+  #settings .row { display: flex; justify-content: space-between; align-items: baseline; }
+  #settings .val { color: var(--text); font-variant-numeric: tabular-nums; }
+  #settings input[type=range] { width: 100%; accent-color: var(--accent); margin: 4px 0 0; }
+  #settings .hint { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  #settings .check { display: flex; align-items: center; gap: 8px; margin-top: 12px; color: var(--text); }
+  #settings .check input { accent-color: var(--accent); }
+  #settings button {
+    margin-top: 12px; width: 100%; padding: 6px; font-size: 12px; cursor: pointer;
+    background: rgba(255,255,255,0.1); color: var(--text); border: 1px solid rgba(255,255,255,0.15); border-radius: 6px;
+  }
   #done {
     position: fixed; inset: 0; display: none; place-items: center;
     background: rgba(0,0,0,0.55); text-align: center;
   }
-  #done .card {
-    background: var(--panel); border-radius: 14px; padding: 28px 36px;
-    border: 1px solid rgba(255,255,255,0.1);
-  }
+  #done .card { padding: 28px 36px; border-radius: 14px; }
   #done h1 { margin: 0 0 8px; color: var(--accent); }
   #done button {
     margin-top: 14px; padding: 10px 18px; font-size: 16px; cursor: pointer;
@@ -58,25 +80,51 @@
 </head>
 <body>
 <canvas id="game"></canvas>
-<canvas id="minimap" width="160" height="120"></canvas>
+<canvas id="minimap"></canvas>
 
-<div id="hud">
+<div id="hud" class="panel">
   <div>Field mowed</div>
   <div class="pct"><span id="pct">0.0</span>%</div>
   <div id="bar"><div id="barFill"></div></div>
   <div><span id="cells">0</span> / <span id="total">0</span> patches</div>
-  <div>Time <span id="time">0:00</span></div>
+  <div>Time <span id="time">0:00</span> · Bumps <span id="bumps">0</span></div>
 </div>
 
-<div id="help">
+<div id="gear" class="panel" title="Settings (Esc)">⚙</div>
+<div id="settings" class="panel">
+  <h3>Mower settings</h3>
+
+  <label>
+    <div class="row"><span>Steering sensitivity</span><span class="val" id="turnVal"></span></div>
+    <input type="range" id="turn" min="0.5" max="3" step="0.05">
+    <div class="hint">How quickly the mower turns when you press left or right.</div>
+  </label>
+
+  <label>
+    <div class="row"><span>Top speed</span><span class="val" id="speedVal"></span></div>
+    <input type="range" id="speed" min="0.4" max="2" step="0.05">
+  </label>
+
+  <label>
+    <div class="row"><span>Acceleration</span><span class="val" id="accelVal"></span></div>
+    <input type="range" id="accel" min="0.3" max="3" step="0.05">
+    <div class="hint">Low = heavy, drifts to a stop. High = snappy, instant response.</div>
+  </label>
+
+  <label class="check"><input type="checkbox" id="invertRev"> Invert steering when reversing</label>
+
+  <button id="resetSettings">Reset to defaults</button>
+</div>
+
+<div id="help" class="panel">
   <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or <kbd>↑</kbd><kbd>←</kbd><kbd>↓</kbd><kbd>→</kbd> to drive ·
-  <kbd>Shift</kbd> boost · <kbd>R</kbd> restart
+  <kbd>Shift</kbd> boost · <kbd>R</kbd> new field · <kbd>Esc</kbd> settings
 </div>
 
 <div id="done">
-  <div class="card">
+  <div class="card panel">
     <h1>Field cleared!</h1>
-    <div>You mowed the whole farm in <strong id="finalTime">0:00</strong>.</div>
+    <div>You mowed the whole farm in <strong id="finalTime">0:00</strong> with <strong id="finalBumps">0</strong> bumps.</div>
     <button id="again">Mow again</button>
   </div>
 </div>
@@ -86,23 +134,59 @@
   'use strict';
 
   // ---------- Config ----------
-  const TILE = 8;                  // world pixels per grass cell
-  const COLS = 320, ROWS = 240;    // field size in cells (a "large farm field")
+  const TILE = 8;                   // world pixels per grass cell
+  const COLS = 320, ROWS = 240;     // field size in cells
   const WORLD_W = COLS * TILE, WORLD_H = ROWS * TILE;
-  const MOWER_SPEED = 170;         // px/s
+  const BASE_SPEED = 170;           // px/s at speed multiplier 1
+  const BASE_TURN = 2.6;            // rad/s at sensitivity 1
+  const BASE_ACCEL = 420;           // px/s^2 at accel multiplier 1
   const BOOST_MULT = 1.7;
-  const TURN_SPEED = 3.6;          // rad/s
-  const DECK_RADIUS = 14;          // cutting deck radius in world px
-  const ZOOM = 2;                  // render scale
+  const DECK_RADIUS = 14;           // cutting deck radius in world px
+  const BODY_RADIUS = 13;           // collision radius
+  const ZOOM = 2;
+  const START = { x: 120, y: 120 };
+
+  // Cell states
+  const CUT = 0, TALL = 1, BLOCKED = 2;
+
+  // ---------- Settings (persisted) ----------
+  const DEFAULTS = { turn: 1.4, speed: 1.0, accel: 1.2, invertRev: true };
+  const SETTINGS_KEY = 'mowfield.settings.v1';
+  const settings = { ...DEFAULTS };
+  try {
+    const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
+    for (const k of Object.keys(DEFAULTS)) if (k in saved) settings[k] = saved[k];
+  } catch (e) { /* ignore corrupt storage */ }
+  function saveSettings() {
+    try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) { /* storage unavailable */ }
+  }
+
+  const $ = id => document.getElementById(id);
+  const sliders = { turn: $('turn'), speed: $('speed'), accel: $('accel') };
+  const invertEl = $('invertRev');
+  function syncSettingsUI() {
+    for (const k of Object.keys(sliders)) {
+      sliders[k].value = settings[k];
+      $(k + 'Val').textContent = Number(settings[k]).toFixed(2) + '×';
+    }
+    invertEl.checked = settings.invertRev;
+  }
+  for (const k of Object.keys(sliders)) {
+    sliders[k].addEventListener('input', () => { settings[k] = parseFloat(sliders[k].value); syncSettingsUI(); saveSettings(); });
+  }
+  invertEl.addEventListener('change', () => { settings.invertRev = invertEl.checked; saveSettings(); });
+  $('resetSettings').addEventListener('click', () => { Object.assign(settings, DEFAULTS); syncSettingsUI(); saveSettings(); });
+  $('gear').addEventListener('click', () => $('settings').classList.toggle('open'));
+  $('settings').addEventListener('keydown', e => { if (e.target.tagName === 'INPUT') e.target.blur(); });
+  syncSettingsUI();
 
   // ---------- Canvas setup ----------
-  const canvas = document.getElementById('game');
+  const canvas = $('game');
   const ctx = canvas.getContext('2d');
-  const mini = document.getElementById('minimap');
+  const mini = $('minimap');
   const mctx = mini.getContext('2d');
   mini.width = COLS; mini.height = ROWS;
-  mini.style.width = '240px';
-  mini.style.height = '180px';
+  mini.style.width = '240px'; mini.style.height = '180px';
 
   function resize() {
     canvas.width = Math.floor(window.innerWidth / ZOOM);
@@ -114,101 +198,322 @@
   window.addEventListener('resize', resize);
   resize();
 
-  // ---------- Field state ----------
-  // 0 = cut, 1 = tall grass. Also keep a per-cell seed for visual variety.
-  const grass = new Uint8Array(COLS * ROWS);
-  const seed = new Uint8Array(COLS * ROWS);
-  let cutCount = 0;
-  const TOTAL = COLS * ROWS;
-
-  // Pre-rendered field layer; redraw only dirty cells for performance.
-  const fieldCanvas = document.createElement('canvas');
-  fieldCanvas.width = WORLD_W; fieldCanvas.height = WORLD_H;
-  const fctx = fieldCanvas.getContext('2d');
-
-  function hash(i) { // tiny deterministic noise
+  // ---------- Random ----------
+  let rngState = 1;
+  function rand() { // mulberry32
+    rngState = (rngState + 0x6D2B79F5) | 0;
+    let t = Math.imul(rngState ^ (rngState >>> 15), 1 | rngState);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  }
+  function hash(i) {
     let x = (i * 2654435761) >>> 0;
     x ^= x >>> 13; x = Math.imul(x, 0x5bd1e995) >>> 0; x ^= x >>> 15;
     return x;
+  }
+  function noise2(x, y) {
+    const xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi;
+    const v = (a, b) => (hash(a * 7919 + b * 104729) & 1023) / 1023;
+    const sx = xf * xf * (3 - 2 * xf), sy = yf * yf * (3 - 2 * yf);
+    const a = v(xi, yi) + (v(xi + 1, yi) - v(xi, yi)) * sx;
+    const b = v(xi, yi + 1) + (v(xi + 1, yi + 1) - v(xi, yi + 1)) * sx;
+    return a + (b - a) * sy;
+  }
+
+  // ---------- Field state ----------
+  const state = new Uint8Array(COLS * ROWS);
+  const cutDir = new Uint8Array(COLS * ROWS);   // 0..7 heading bucket when cut (for stripes)
+  const seed = new Uint8Array(COLS * ROWS);
+  const height = new Float32Array(COLS * ROWS);
+  let cutCount = 0, mowable = 0;
+
+  const fieldCanvas = document.createElement('canvas');
+  fieldCanvas.width = WORLD_W; fieldCanvas.height = WORLD_H;
+  const fctx = fieldCanvas.getContext('2d');
+  const trackCanvas = document.createElement('canvas');    // tire tracks
+  trackCanvas.width = WORLD_W; trackCanvas.height = WORLD_H;
+  const tctx = trackCanvas.getContext('2d');
+  const propCanvas = document.createElement('canvas');     // obstacles at ground level
+  propCanvas.width = WORLD_W; propCanvas.height = WORLD_H;
+  const pctx = propCanvas.getContext('2d');
+
+  const PALETTE_TALL = [[38, 92, 30], [46, 112, 38], [54, 126, 42], [62, 138, 48]];
+  const PALETTE_CUT  = [[104, 176, 70], [116, 190, 80], [128, 202, 90]];
+  function mix(c, k) { return `rgb(${Math.round(c[0] * k)},${Math.round(c[1] * k)},${Math.round(c[2] * k)})`; }
+
+  // Mowing stripes: grass bent away from the viewer looks lighter, bent toward looks darker.
+  // The light comes from the top-right, so headings pointing up/right read light and down/left read dark.
+  const LIGHT_ANGLE = -Math.PI / 4;
+  const DIR_SHADE = [];
+  for (let d = 0; d < 8; d++) {
+    const a = (d / 8) * Math.PI * 2;
+    const align = Math.cos(a - LIGHT_ANGLE);      // 1 = towards light, -1 = away
+    DIR_SHADE[d] = 1.0 + 0.11 * align;            // ~0.89 .. 1.11
   }
 
   function drawCell(c, r) {
     const i = r * COLS + c;
     const x = c * TILE, y = r * TILE;
     const s = seed[i];
-    if (grass[i]) {
-      // Tall overgrown grass: dark green base with lighter blades
-      const shade = 0.85 + (s % 5) * 0.05;
-      fctx.fillStyle = `rgb(${Math.round(46 * shade)},${Math.round(112 * shade)},${Math.round(38 * shade)})`;
+    const h = height[i];
+    const st = state[i];
+    if (st === TALL || st === BLOCKED) {
+      const base = PALETTE_TALL[Math.min(3, Math.floor(h * 4))];
+      fctx.fillStyle = mix(base, 0.92 + (s % 4) * 0.03);
       fctx.fillRect(x, y, TILE, TILE);
-      fctx.strokeStyle = 'rgba(160, 220, 90, 0.55)';
-      fctx.lineWidth = 1;
-      fctx.beginPath();
-      for (let k = 0; k < 2; k++) {
-        const bx = x + 1 + ((s * (k + 3)) % (TILE - 2));
-        const by = y + TILE - 1;
+      if (h < 0.35) { fctx.fillStyle = 'rgba(0,0,0,0.08)'; fctx.fillRect(x, y, TILE, TILE); }
+      for (let k = 0; k < 3; k++) {
+        const bx = x + ((s * (k * 5 + 3)) % TILE);
+        const by = y + TILE;
         const lean = ((s >> k) & 1) ? 1 : -1;
-        fctx.moveTo(bx + 0.5, by);
-        fctx.lineTo(bx + lean + 0.5, by - 4 - (s % 3));
+        const tall = 4 + ((s >> (k + 2)) % 4);
+        fctx.strokeStyle = k === 1 ? 'rgba(190, 235, 110, 0.7)' : 'rgba(140, 200, 80, 0.6)';
+        fctx.lineWidth = 1;
+        fctx.beginPath(); fctx.moveTo(bx + 0.5, by); fctx.lineTo(bx + lean + 0.5, by - tall); fctx.stroke();
       }
-      fctx.stroke();
-      // Occasional wildflower
-      if (s % 23 === 0) {
-        fctx.fillStyle = (s & 1) ? '#f5e663' : '#f2f2f2';
-        fctx.fillRect(x + (s % 5) + 1, y + 2 + (s % 3), 2, 2);
-      }
+      const f = s % 29;
+      if (f === 0) { fctx.fillStyle = '#f7e54a'; fctx.fillRect(x + 2, y + 2, 2, 2); fctx.fillStyle = '#c8a415'; fctx.fillRect(x + 3, y + 3, 1, 1); }
+      else if (f === 1) { fctx.fillStyle = '#f4f4f4'; fctx.fillRect(x + 4, y + 1, 2, 2); fctx.fillStyle = '#e8c33a'; fctx.fillRect(x + 4, y + 1, 1, 1); }
+      else if (f === 2) { fctx.fillStyle = '#c86bd8'; fctx.fillRect(x + 1, y + 4, 2, 2); }
+      else if (f === 3 && h > 0.6) { fctx.fillStyle = '#7a4e2a'; fctx.fillRect(x + 3, y + 5, 1, 3); fctx.fillStyle = '#b8862b'; fctx.fillRect(x + 2, y + 3, 3, 2); }
     } else {
-      // Cut grass: lighter, with subtle mowing-stripe alternation per row
-      const stripe = ((r >> 1) % 2) ? 1.0 : 0.93;
-      const shade = (0.96 + (s % 3) * 0.02) * stripe;
-      fctx.fillStyle = `rgb(${Math.round(120 * shade)},${Math.round(196 * shade)},${Math.round(84 * shade)})`;
+      const shade = DIR_SHADE[cutDir[i]];
+      const base = PALETTE_CUT[Math.min(2, Math.floor(h * 3))];
+      fctx.fillStyle = mix(base, (0.97 + (s % 3) * 0.015) * shade);
       fctx.fillRect(x, y, TILE, TILE);
+      // Fine grain lines following the cut direction
+      const d = cutDir[i];
+      fctx.fillStyle = shade > 1 ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.10)';
+      if (d === 0 || d === 4) fctx.fillRect(x, y + (s % TILE), TILE, 1);            // horizontal pass
+      else if (d === 2 || d === 6) fctx.fillRect(x + (s % TILE), y, 1, TILE);       // vertical pass
+      else { const o = s % TILE; fctx.fillRect(x + o, y + ((d === 1 || d === 5) ? o : TILE - 1 - o), 2, 1); }
       fctx.fillStyle = 'rgba(0,0,0,0.05)';
-      if (s % 7 === 0) fctx.fillRect(x + (s % TILE), y + (s % 9), 2, 1);
+      fctx.fillRect(x + (s % TILE), y + ((s >> 3) % TILE), 1, 1);
+      if (s % 11 === 0) { fctx.fillStyle = 'rgba(215,235,130,0.55)'; fctx.fillRect(x + (s % 6), y + (s % 5), 2, 1); }
     }
   }
 
-  function resetField() {
-    for (let i = 0; i < TOTAL; i++) { grass[i] = 1; seed[i] = hash(i + 17) & 255; }
-    cutCount = 0;
-    for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) drawCell(c, r);
+  // ---------- Obstacles ----------
+  // Types: rock, bale (hay bale), tree (trunk collides, canopy drawn over mower), pond
+  const obstacles = [];
+
+  function blockCells(ob) {
+    // Cells fully under a solid obstacle are not mowable
+    const r = ob.blockR;
+    const c0 = Math.max(0, Math.floor((ob.x - r) / TILE)), c1 = Math.min(COLS - 1, Math.floor((ob.x + r) / TILE));
+    const r0 = Math.max(0, Math.floor((ob.y - r) / TILE)), r1 = Math.min(ROWS - 1, Math.floor((ob.y + r) / TILE));
+    for (let rr = r0; rr <= r1; rr++) for (let cc = c0; cc <= c1; cc++) {
+      const cx = cc * TILE + TILE / 2, cy = rr * TILE + TILE / 2;
+      if ((cx - ob.x) ** 2 + (cy - ob.y) ** 2 <= r * r) state[rr * COLS + cc] = BLOCKED;
+    }
   }
 
-  // Cut every cell overlapped by the circular deck at (wx, wy)
-  function cutAt(wx, wy) {
+  function placeObstacles() {
+    obstacles.length = 0;
+    const tryPlace = (type, radius, blockR, attempts = 60) => {
+      for (let a = 0; a < attempts; a++) {
+        const x = 60 + rand() * (WORLD_W - 120), y = 60 + rand() * (WORLD_H - 120);
+        if (Math.hypot(x - START.x, y - START.y) < 180) continue;
+        let ok = true;
+        for (const o of obstacles) if (Math.hypot(o.x - x, o.y - y) < o.radius + radius + 40) { ok = false; break; }
+        if (!ok) continue;
+        const ob = { type, x, y, radius, blockR, seed: Math.floor(rand() * 1e6), hit: 0 };
+        obstacles.push(ob); return ob;
+      }
+      return null;
+    };
+    // One pond, a few trees, rocks and hay bales
+    tryPlace('pond', 70, 70);
+    for (let i = 0; i < 7; i++) tryPlace('tree', 9, 0);
+    for (let i = 0; i < 14; i++) tryPlace('rock', 10 + rand() * 8, 0);
+    for (let i = 0; i < 8; i++) tryPlace('bale', 13, 0);
+    for (const ob of obstacles) {
+      if (ob.type === 'pond') { ob.blockR = ob.radius; }
+      else ob.blockR = ob.type === 'tree' ? ob.radius * 0.8 : ob.radius * 0.9;
+      blockCells(ob);
+    }
+  }
+
+  function drawProps() {
+    pctx.clearRect(0, 0, WORLD_W, WORLD_H);
+    for (const ob of obstacles) {
+      const { x, y, radius: r } = ob;
+      const sr = ob.seed;
+      pctx.save(); pctx.translate(x, y);
+      if (ob.type === 'pond') {
+        // Muddy bank, water, highlights, reeds
+        pctx.fillStyle = '#6e5634';
+        blob(pctx, r + 8, sr); pctx.fill();
+        pctx.fillStyle = '#3f7fb5';
+        blob(pctx, r, sr); pctx.fill();
+        pctx.fillStyle = '#4f93c9';
+        blob(pctx, r * 0.72, sr + 3); pctx.fill();
+        pctx.fillStyle = 'rgba(255,255,255,0.35)';
+        for (let k = 0; k < 6; k++) {
+          const a = (sr + k * 97) % 360 * Math.PI / 180, d = r * (0.2 + ((sr >> k) % 5) / 10);
+          pctx.fillRect(Math.cos(a) * d, Math.sin(a) * d, 6 + (k % 3) * 3, 1);
+        }
+        pctx.strokeStyle = '#5c8a2e'; pctx.lineWidth = 1.5;
+        for (let k = 0; k < 14; k++) {
+          const a = k / 14 * Math.PI * 2 + ((sr >> (k % 8)) % 3) * 0.1;
+          const d = r + 2 + ((sr >> k) % 4);
+          const px = Math.cos(a) * d, py = Math.sin(a) * d;
+          pctx.beginPath(); pctx.moveTo(px, py); pctx.lineTo(px + ((k & 1) ? 2 : -2), py - 7); pctx.stroke();
+        }
+      } else if (ob.type === 'rock') {
+        pctx.fillStyle = 'rgba(0,0,0,0.3)';
+        blob(pctx, r, sr, 2, 3); pctx.fill();
+        pctx.fillStyle = '#6f6f6a'; blob(pctx, r, sr); pctx.fill();
+        pctx.fillStyle = '#8c8c86'; blob(pctx, r * 0.7, sr + 1, -2, -2); pctx.fill();
+        pctx.fillStyle = '#a9a9a2'; blob(pctx, r * 0.35, sr + 2, -3, -3); pctx.fill();
+        pctx.strokeStyle = '#4a4a46'; pctx.lineWidth = 1; blob(pctx, r, sr); pctx.stroke();
+        pctx.fillStyle = 'rgba(80,120,40,0.6)'; pctx.fillRect(-r * 0.5, r * 0.5, 3, 2); // moss
+      } else if (ob.type === 'bale') {
+        // Round hay bale, seen from above as a cylinder end
+        pctx.fillStyle = 'rgba(0,0,0,0.3)';
+        pctx.beginPath(); pctx.ellipse(2, 3, r + 1, r * 0.8, 0, 0, Math.PI * 2); pctx.fill();
+        pctx.fillStyle = '#c9a44a';
+        pctx.fillRect(-r, -r * 0.75, r * 2, r * 1.5);
+        pctx.fillStyle = '#b08b35';
+        for (let k = -r * 0.75 + 2; k < r * 0.75; k += 3) pctx.fillRect(-r, k, r * 2, 1);
+        pctx.fillStyle = '#e0c06a';
+        pctx.beginPath(); pctx.arc(-r, 0, r * 0.75, 0, Math.PI * 2); pctx.fill();
+        pctx.strokeStyle = '#a07a2a'; pctx.lineWidth = 1;
+        for (let k = 1; k <= 3; k++) { pctx.beginPath(); pctx.arc(-r, 0, r * 0.75 * k / 3.5, 0, Math.PI * 2); pctx.stroke(); }
+        pctx.strokeStyle = '#8b6a22'; pctx.strokeRect(-r + 0.5, -r * 0.75 + 0.5, r * 2 - 1, r * 1.5 - 1);
+      } else if (ob.type === 'tree') {
+        // Trunk + root shadow on the ground layer; canopy is drawn in the overhead pass
+        pctx.fillStyle = 'rgba(0,0,0,0.25)';
+        pctx.beginPath(); pctx.ellipse(6, 8, 24, 16, 0, 0, Math.PI * 2); pctx.fill();
+        pctx.fillStyle = '#5a3a1e';
+        pctx.beginPath(); pctx.arc(0, 0, r * 0.6, 0, Math.PI * 2); pctx.fill();
+        pctx.fillStyle = '#7a5230';
+        pctx.beginPath(); pctx.arc(-1, -1, r * 0.35, 0, Math.PI * 2); pctx.fill();
+      }
+      pctx.restore();
+    }
+  }
+
+  // Irregular blob path, deterministic per seed
+  function blob(c, r, s, ox = 0, oy = 0) {
+    c.beginPath();
+    const n = 10;
+    for (let k = 0; k <= n; k++) {
+      const a = k / n * Math.PI * 2;
+      const wob = 1 + (((s * (k % n + 1) * 2654435761) >>> 0) % 100) / 100 * 0.25 - 0.125;
+      const px = ox + Math.cos(a) * r * wob, py = oy + Math.sin(a) * r * wob;
+      if (k === 0) c.moveTo(px, py); else c.lineTo(px, py);
+    }
+    c.closePath();
+  }
+
+  function drawCanopies(camX, camY) {
+    for (const ob of obstacles) {
+      if (ob.type !== 'tree') continue;
+      const sx = ob.x - camX, sy = ob.y - camY;
+      if (sx < -40 || sy < -40 || sx > canvas.width + 40 || sy > canvas.height + 40) continue;
+      const sway = Math.sin(performance.now() / 900 + ob.seed) * 1.2;
+      ctx.save(); ctx.translate(sx + sway, sy - 4);
+      ctx.globalAlpha = 0.95;
+      ctx.fillStyle = '#255c22'; blob(ctx, 24, ob.seed); ctx.fill();
+      ctx.fillStyle = '#2f7a2b'; blob(ctx, 19, ob.seed + 5, -2, -3); ctx.fill();
+      ctx.fillStyle = '#3f9a37'; blob(ctx, 12, ob.seed + 9, -5, -6); ctx.fill();
+      ctx.fillStyle = 'rgba(190,240,120,0.35)'; blob(ctx, 5, ob.seed + 13, -8, -9); ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  // Nearest-surface clamp of a point against the field's hard edge plus all obstacles
+  function collide() {
+    let bumped = false;
+    for (const ob of obstacles) {
+      const cr = ob.type === 'tree' ? ob.radius * 0.7 : ob.radius;
+      const dx = mower.x - ob.x, dy = mower.y - ob.y;
+      const d = Math.hypot(dx, dy), minD = cr + BODY_RADIUS;
+      if (d < minD && d > 0.001) {
+        const push = minD - d;
+        mower.x += dx / d * push; mower.y += dy / d * push;
+        // Kill the velocity component into the obstacle
+        const nx = dx / d, ny = dy / d;
+        const into = Math.cos(mower.angle) * nx + Math.sin(mower.angle) * ny;
+        if (Math.sign(mower.vel) * into < 0) {
+          if (Math.abs(mower.vel) > 60) { bumped = true; ob.hit = 0.3; }
+          mower.vel *= -0.25;
+        }
+      }
+    }
+    return bumped;
+  }
+
+  function resetField() {
+    rngState = (Date.now() ^ 0x9e3779b9) >>> 0;
+    for (let i = 0; i < state.length; i++) {
+      state[i] = TALL; cutDir[i] = 0; seed[i] = hash(i + 17) & 255;
+      const c = i % COLS, r = (i / COLS) | 0;
+      height[i] = 0.6 * noise2(c / 18, r / 18) + 0.4 * noise2(c / 5 + 100, r / 5 + 100);
+    }
+    placeObstacles();
+    mowable = 0;
+    for (let i = 0; i < state.length; i++) if (state[i] === TALL) mowable++;
+    cutCount = 0;
+    for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) drawCell(c, r);
+    drawProps();
+    tctx.clearRect(0, 0, WORLD_W, WORLD_H);
+  }
+
+  // ---------- Particles ----------
+  const particles = [];
+  function spawnClippings(wx, wy, angle, speed) {
+    const n = 1 + Math.floor(Math.abs(speed) / 120);
+    for (let k = 0; k < n; k++) {
+      const a = angle + Math.PI / 2 + (Math.random() - 0.5) * 0.9;
+      const v = 40 + Math.random() * 60;
+      particles.push({
+        x: wx + Math.cos(angle + Math.PI / 2) * 10, y: wy + Math.sin(angle + Math.PI / 2) * 10,
+        vx: Math.cos(a) * v, vy: Math.sin(a) * v - 20, life: 0.5 + Math.random() * 0.4,
+        c: Math.random() < 0.5 ? '#b9e86a' : '#7fc14a',
+      });
+    }
+  }
+  function spawnSparks(x, y) {
+    for (let k = 0; k < 8; k++) {
+      const a = Math.random() * Math.PI * 2, v = 60 + Math.random() * 80;
+      particles.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 0.35, c: '#ffd54f' });
+    }
+  }
+
+  function cutAt(wx, wy, dirBucket) {
     const rad = DECK_RADIUS;
     const c0 = Math.max(0, Math.floor((wx - rad) / TILE));
     const c1 = Math.min(COLS - 1, Math.floor((wx + rad) / TILE));
     const r0 = Math.max(0, Math.floor((wy - rad) / TILE));
     const r1 = Math.min(ROWS - 1, Math.floor((wy + rad) / TILE));
     const r2 = rad * rad;
+    let cutAny = false;
     for (let r = r0; r <= r1; r++) {
       for (let c = c0; c <= c1; c++) {
         const i = r * COLS + c;
-        if (!grass[i]) continue;
-        // nearest point on the cell to the deck centre
+        if (state[i] !== TALL) continue;
         const nx = Math.max(c * TILE, Math.min(wx, c * TILE + TILE));
         const ny = Math.max(r * TILE, Math.min(wy, r * TILE + TILE));
         const dx = nx - wx, dy = ny - wy;
-        if (dx * dx + dy * dy <= r2) {
-          grass[i] = 0; cutCount++;
-          drawCell(c, r);
-        }
+        if (dx * dx + dy * dy <= r2) { state[i] = CUT; cutDir[i] = dirBucket; cutCount++; drawCell(c, r); cutAny = true; }
       }
     }
+    return cutAny;
   }
 
   // ---------- Mower ----------
-  const mower = { x: 0, y: 0, angle: 0, vx: 0, vy: 0 };
-  let elapsed = 0, finished = false, prevX = 0, prevY = 0;
+  const mower = { x: 0, y: 0, angle: 0, vel: 0, wheelPhase: 0, bladeAngle: 0 };
+  let elapsed = 0, finished = false, prevX = 0, prevY = 0, exhaustTimer = 0, bumps = 0, shake = 0;
 
   function resetGame() {
     resetField();
-    mower.x = 120; mower.y = 120; mower.angle = 0;
+    mower.x = START.x; mower.y = START.y; mower.angle = 0; mower.vel = 0;
     prevX = mower.x; prevY = mower.y;
-    elapsed = 0; finished = false;
-    document.getElementById('done').style.display = 'none';
-    cutAt(mower.x, mower.y);
+    elapsed = 0; finished = false; bumps = 0; particles.length = 0;
+    $('done').style.display = 'none';
+    cutAt(mower.x, mower.y, 0);
     updateHud();
   }
 
@@ -221,104 +526,242 @@
   };
   window.addEventListener('keydown', e => {
     if (e.code === 'KeyR') { resetGame(); return; }
+    if (e.code === 'Escape') { $('settings').classList.toggle('open'); return; }
     const k = KEYMAP[e.code];
     if (k) { keys.add(k); e.preventDefault(); }
   });
   window.addEventListener('keyup', e => { const k = KEYMAP[e.code]; if (k) keys.delete(k); });
   window.addEventListener('blur', () => keys.clear());
-  document.getElementById('again').addEventListener('click', resetGame);
+  $('again').addEventListener('click', resetGame);
 
   // ---------- Update ----------
   function update(dt) {
     if (!finished) elapsed += dt;
 
-    // Tank-style controls: up/down drive forward/back, left/right steer.
     let throttle = 0, steer = 0;
     if (keys.has('up')) throttle += 1;
     if (keys.has('down')) throttle -= 1;
     if (keys.has('left')) steer -= 1;
     if (keys.has('right')) steer += 1;
 
-    // Steering only applies when moving (feels like a real mower); allow pivot when stopped but slower.
-    const steerScale = throttle !== 0 ? 1 : 0.6;
-    mower.angle += steer * TURN_SPEED * steerScale * dt * (throttle < 0 ? -1 : 1);
+    const maxSpeed = BASE_SPEED * settings.speed * (keys.has('boost') ? BOOST_MULT : 1);
+    const accel = BASE_ACCEL * settings.accel;
+    const target = throttle * maxSpeed * (throttle < 0 ? 0.6 : 1);
+    if (mower.vel < target) mower.vel = Math.min(target, mower.vel + accel * dt);
+    else if (mower.vel > target) mower.vel = Math.max(target, mower.vel - accel * dt);
 
-    const speed = MOWER_SPEED * (keys.has('boost') ? BOOST_MULT : 1) * throttle;
-    mower.x += Math.cos(mower.angle) * speed * dt;
-    mower.y += Math.sin(mower.angle) * speed * dt;
+    const speedFrac = Math.min(1, Math.abs(mower.vel) / (BASE_SPEED * 0.5));
+    const steerAuthority = 0.35 + 0.65 * speedFrac;
+    const dir = (settings.invertRev && mower.vel < -5) ? -1 : 1;
+    mower.angle += steer * BASE_TURN * settings.turn * steerAuthority * dir * dt;
 
-    // Keep inside the field (with fence margin)
-    mower.x = Math.max(DECK_RADIUS, Math.min(WORLD_W - DECK_RADIUS, mower.x));
-    mower.y = Math.max(DECK_RADIUS, Math.min(WORLD_H - DECK_RADIUS, mower.y));
+    mower.x += Math.cos(mower.angle) * mower.vel * dt;
+    mower.y += Math.sin(mower.angle) * mower.vel * dt;
 
-    // Cut along the path travelled this frame so fast movement leaves no gaps
+    // Fence
+    const minX = BODY_RADIUS + 6, maxX = WORLD_W - BODY_RADIUS - 6;
+    const minY = BODY_RADIUS + 6, maxY = WORLD_H - BODY_RADIUS - 6;
+    if (mower.x < minX || mower.x > maxX || mower.y < minY || mower.y > maxY) {
+      mower.x = Math.max(minX, Math.min(maxX, mower.x));
+      mower.y = Math.max(minY, Math.min(maxY, mower.y));
+      if (Math.abs(mower.vel) > 60) { bumps++; shake = 4; spawnSparks(mower.x, mower.y); }
+      mower.vel *= 0.2;
+    }
+    if (collide()) { bumps++; shake = 5; spawnSparks(mower.x + Math.cos(mower.angle) * 12, mower.y + Math.sin(mower.angle) * 12); }
+
+    // Direction bucket from the actual travel heading (reverse flips it)
+    const heading = mower.vel < 0 ? mower.angle + Math.PI : mower.angle;
+    const dirBucket = ((Math.round(heading / (Math.PI / 4)) % 8) + 8) % 8;
+
     const dist = Math.hypot(mower.x - prevX, mower.y - prevY);
     const steps = Math.max(1, Math.ceil(dist / (DECK_RADIUS * 0.5)));
+    let cutAny = false;
     for (let s = 1; s <= steps; s++) {
       const t = s / steps;
-      cutAt(prevX + (mower.x - prevX) * t, prevY + (mower.y - prevY) * t);
+      if (cutAt(prevX + (mower.x - prevX) * t, prevY + (mower.y - prevY) * t, dirBucket)) cutAny = true;
+    }
+    if (cutAny && Math.abs(mower.vel) > 20) spawnClippings(mower.x, mower.y, mower.angle, mower.vel);
+
+    if (dist > 0.5) {
+      const cos = Math.cos(mower.angle), sin = Math.sin(mower.angle);
+      tctx.fillStyle = 'rgba(40, 70, 25, 0.10)';
+      for (const side of [-9, 9]) tctx.fillRect(mower.x - sin * side - 1.5, mower.y + cos * side - 1.5, 3, 3);
     }
     prevX = mower.x; prevY = mower.y;
 
-    if (!finished && cutCount >= TOTAL) {
+    mower.wheelPhase += mower.vel * dt / 6;
+    mower.bladeAngle += dt * 40;
+    shake = Math.max(0, shake - dt * 20);
+
+    exhaustTimer -= dt;
+    if (exhaustTimer <= 0) {
+      exhaustTimer = Math.abs(mower.vel) > 20 ? 0.08 : 0.25;
+      const bx = mower.x - Math.cos(mower.angle) * 14, by = mower.y - Math.sin(mower.angle) * 14;
+      particles.push({ x: bx, y: by, vx: -Math.cos(mower.angle) * 20 + (Math.random() - 0.5) * 10,
+        vy: -Math.sin(mower.angle) * 20 - 8, life: 0.7, smoke: true });
+    }
+
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.life -= dt;
+      if (p.life <= 0) { particles.splice(i, 1); continue; }
+      p.x += p.vx * dt; p.y += p.vy * dt;
+      if (!p.smoke) p.vy += 90 * dt; else { p.vx *= 0.96; p.vy *= 0.96; }
+    }
+    for (const ob of obstacles) if (ob.hit > 0) ob.hit -= dt;
+
+    if (!finished && cutCount >= mowable) {
       finished = true;
-      document.getElementById('finalTime').textContent = fmtTime(elapsed);
-      document.getElementById('done').style.display = 'grid';
+      $('finalTime').textContent = fmtTime(elapsed);
+      $('finalBumps').textContent = bumps;
+      $('done').style.display = 'grid';
     }
   }
 
   // ---------- Render ----------
+  function drawFence(camX, camY, vw, vh) {
+    const POST = 32;
+    ctx.strokeStyle = '#8a5a2b'; ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.rect(-camX + 2.5, -camY + 2.5, WORLD_W - 5, WORLD_H - 5);
+    ctx.rect(-camX + 5.5, -camY + 5.5, WORLD_W - 11, WORLD_H - 11);
+    ctx.stroke();
+    ctx.fillStyle = '#6b4320';
+    const x0 = Math.max(0, Math.floor(camX / POST) * POST), x1 = Math.min(WORLD_W, camX + vw + POST);
+    const y0 = Math.max(0, Math.floor(camY / POST) * POST), y1 = Math.min(WORLD_H, camY + vh + POST);
+    for (let x = x0; x <= x1; x += POST) {
+      if (camY <= 8) ctx.fillRect(x - camX - 2, -camY, 4, 9);
+      if (camY + vh >= WORLD_H - 8) ctx.fillRect(x - camX - 2, WORLD_H - camY - 9, 4, 9);
+    }
+    for (let y = y0; y <= y1; y += POST) {
+      if (camX <= 8) ctx.fillRect(-camX, y - camY - 2, 9, 4);
+      if (camX + vw >= WORLD_W - 8) ctx.fillRect(WORLD_W - camX - 9, y - camY - 2, 9, 4);
+    }
+  }
+
+  function drawMower(sx, sy) {
+    const m = mower;
+    ctx.save();
+    ctx.translate(sx, sy);
+    ctx.rotate(m.angle);
+
+    ctx.fillStyle = 'rgba(0,0,0,0.28)';
+    ctx.beginPath(); ctx.ellipse(1, 3, 17, 12, 0, 0, Math.PI * 2); ctx.fill();
+
+    // Deck
+    ctx.fillStyle = '#9e1f1f';
+    ctx.beginPath(); ctx.arc(4, 0, DECK_RADIUS, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#c62828';
+    ctx.beginPath(); ctx.arc(4, -1, DECK_RADIUS - 2, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#6e1010'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(4, 0, DECK_RADIUS, 0, Math.PI * 2); ctx.stroke();
+    ctx.save();
+    ctx.translate(4, 0); ctx.rotate(m.bladeAngle);
+    ctx.strokeStyle = 'rgba(255,255,255,0.18)'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(-9, 0); ctx.lineTo(9, 0); ctx.stroke();
+    ctx.restore();
+    ctx.fillStyle = '#7a1414'; ctx.fillRect(0, DECK_RADIUS - 3, 8, 5); // chute
+
+    // Wheels
+    const wheel = (x, y, w, h) => {
+      ctx.fillStyle = '#111'; ctx.fillRect(x - w / 2, y - h / 2, w, h);
+      ctx.fillStyle = '#333';
+      const t = ((m.wheelPhase % 1) + 1) % 1;
+      for (let k = 0; k < 3; k++) ctx.fillRect(x - w / 2 + ((t + k / 3) % 1) * w, y - h / 2, 1, h);
+      ctx.fillStyle = '#777'; ctx.fillRect(x - 1, y - 1, 2, 2);
+    };
+    wheel(-9, -12, 8, 5); wheel(-9, 12, 8, 5);
+    wheel(11, -10, 5, 4);  wheel(11, 10, 5, 4);
+
+    // Chassis and hood
+    ctx.fillStyle = '#b71c1c'; ctx.fillRect(-14, -8, 26, 16);
+    ctx.fillStyle = '#e53935'; ctx.fillRect(-13, -7, 24, 13);
+    ctx.fillStyle = 'rgba(255,255,255,0.18)'; ctx.fillRect(-13, -7, 24, 2);
+    ctx.fillStyle = '#d32f2f'; ctx.fillRect(4, -6, 9, 12);
+    ctx.fillStyle = '#2b2b2b';
+    for (let k = -4; k <= 4; k += 2) ctx.fillRect(10, k, 2, 1);
+    ctx.fillStyle = '#fff59d'; ctx.fillRect(12, -5, 2, 2); ctx.fillRect(12, 3, 2, 2);
+    ctx.fillStyle = '#555'; ctx.fillRect(-14, -3, 2, 6);
+    ctx.fillStyle = '#888'; ctx.fillRect(-15, -1, 2, 2);
+    // Seat and driver
+    ctx.fillStyle = '#1e1e1e'; ctx.fillRect(-10, -5, 8, 10);
+    ctx.fillStyle = '#333'; ctx.fillRect(-10, -5, 2, 10);
+    ctx.fillStyle = '#3b6fb6'; ctx.fillRect(-7, -4, 5, 8);
+    ctx.fillStyle = '#f1c27d'; ctx.fillRect(-6, -2, 3, 4);
+    ctx.fillStyle = '#2e7d32'; ctx.fillRect(-7, -3, 4, 2);
+    ctx.fillStyle = '#f1c27d'; ctx.fillRect(-3, -5, 2, 2); ctx.fillRect(-3, 3, 2, 2);
+    ctx.strokeStyle = '#222'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(0, 0, 3, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = '#444'; ctx.fillRect(1, -1, 3, 2);
+
+    ctx.restore();
+  }
+
   function render() {
     const vw = canvas.width, vh = canvas.height;
-    // Camera centred on mower, clamped to world bounds
-    let camX = Math.round(mower.x - vw / 2);
-    let camY = Math.round(mower.y - vh / 2);
+    let camX = Math.round(mower.x - vw / 2 + (Math.random() - 0.5) * shake);
+    let camY = Math.round(mower.y - vh / 2 + (Math.random() - 0.5) * shake);
     camX = Math.max(0, Math.min(WORLD_W - vw, camX));
     camY = Math.max(0, Math.min(WORLD_H - vh, camY));
     if (WORLD_W < vw) camX = -(vw - WORLD_W) / 2;
     if (WORLD_H < vh) camY = -(vh - WORLD_H) / 2;
 
-    ctx.fillStyle = '#3b2a1a'; // dirt outside the fence
-    ctx.fillRect(0, 0, vw, vh);
+    ctx.fillStyle = '#4a3521'; ctx.fillRect(0, 0, vw, vh);
     ctx.drawImage(fieldCanvas, -camX, -camY);
+    ctx.drawImage(trackCanvas, -camX, -camY);
+    ctx.drawImage(propCanvas, -camX, -camY);
+    drawFence(camX, camY, vw, vh);
 
-    // Fence around the field
-    ctx.strokeStyle = '#8b5a2b'; ctx.lineWidth = 3;
-    ctx.strokeRect(-camX + 1.5, -camY + 1.5, WORLD_W - 3, WORLD_H - 3);
+    // Flash obstacles that were just hit
+    for (const ob of obstacles) {
+      if (ob.hit <= 0) continue;
+      ctx.fillStyle = `rgba(255,255,255,${ob.hit})`;
+      ctx.beginPath(); ctx.arc(ob.x - camX, ob.y - camY, ob.radius + 2, 0, Math.PI * 2); ctx.fill();
+    }
 
-    // Mower
-    ctx.save();
-    ctx.translate(mower.x - camX, mower.y - camY);
-    ctx.rotate(mower.angle);
-    // shadow
-    ctx.fillStyle = 'rgba(0,0,0,0.25)';
-    ctx.beginPath(); ctx.ellipse(1, 3, 15, 11, 0, 0, Math.PI * 2); ctx.fill();
-    // cutting deck
-    ctx.fillStyle = '#c62828';
-    ctx.beginPath(); ctx.arc(2, 0, DECK_RADIUS, 0, Math.PI * 2); ctx.fill();
-    ctx.strokeStyle = '#7a1414'; ctx.lineWidth = 2; ctx.stroke();
-    // body / seat
-    ctx.fillStyle = '#e53935'; ctx.fillRect(-10, -7, 16, 14);
-    ctx.fillStyle = '#222'; ctx.fillRect(-9, -5, 7, 10); // seat
-    ctx.fillStyle = '#444'; ctx.fillRect(4, -5, 3, 10);  // steering column
-    // wheels
-    ctx.fillStyle = '#111';
-    ctx.fillRect(-12, -11, 6, 4); ctx.fillRect(-12, 7, 6, 4);
-    ctx.fillRect(8, -10, 5, 3); ctx.fillRect(8, 7, 5, 3);
-    // front marker
-    ctx.fillStyle = '#ffeb3b'; ctx.fillRect(13, -2, 3, 4);
-    ctx.restore();
+    for (const p of particles) {
+      if (p.smoke) continue;
+      ctx.fillStyle = p.c; ctx.globalAlpha = Math.min(1, p.life * 2);
+      ctx.fillRect(p.x - camX, p.y - camY, 2, 1);
+    }
+    ctx.globalAlpha = 1;
+
+    drawMower(mower.x - camX, mower.y - camY);
+
+    for (const p of particles) {
+      if (!p.smoke) continue;
+      const a = Math.max(0, p.life / 0.7);
+      ctx.fillStyle = `rgba(200,200,200,${0.35 * a})`;
+      ctx.beginPath(); ctx.arc(p.x - camX, p.y - camY, 2 + (1 - a) * 4, 0, Math.PI * 2); ctx.fill();
+    }
+
+    drawCanopies(camX, camY);
+
+    const g = ctx.createRadialGradient(vw / 2, vh / 2, Math.min(vw, vh) * 0.45, vw / 2, vh / 2, Math.max(vw, vh) * 0.75);
+    g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,0,0,0.28)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, vw, vh);
   }
 
+  const miniImg = mctx.createImageData(COLS, ROWS);
   function renderMini() {
-    // Repaint the whole minimap from the grass array (160x120 px, cheap) plus the mower dot.
-    const img = mctx.createImageData(COLS, ROWS);
-    const d = img.data;
-    for (let i = 0; i < TOTAL; i++) {
-      const g = grass[i];
-      d[i * 4] = g ? 0x2e : 0x9b; d[i * 4 + 1] = g ? 0x70 : 0xe3; d[i * 4 + 2] = g ? 0x26 : 0x6a; d[i * 4 + 3] = 255;
+    const d = miniImg.data;
+    for (let i = 0; i < state.length; i++) {
+      const st = state[i], h = height[i];
+      let r, g, b;
+      if (st === TALL) { r = 0x2e; g = 0x70; b = 0x26; }
+      else if (st === BLOCKED) { r = 0x6a; g = 0x6a; b = 0x66; }
+      else { const k = DIR_SHADE[cutDir[i]]; r = 0x9b * k; g = 0xe3 * k; b = 0x6a * k; }
+      const k = 0.85 + h * 0.3;
+      d[i * 4] = r * k; d[i * 4 + 1] = g * k; d[i * 4 + 2] = b * k; d[i * 4 + 3] = 255;
     }
-    mctx.putImageData(img, 0, 0);
+    mctx.putImageData(miniImg, 0, 0);
+    for (const ob of obstacles) {
+      mctx.fillStyle = ob.type === 'pond' ? '#3f7fb5' : ob.type === 'tree' ? '#1f4d1c' : ob.type === 'bale' ? '#c9a44a' : '#777';
+      mctx.beginPath(); mctx.arc(ob.x / TILE, ob.y / TILE, Math.max(1.5, (ob.type === 'tree' ? 24 : ob.radius) / TILE), 0, Math.PI * 2); mctx.fill();
+    }
+    const vw = canvas.width / TILE, vh = canvas.height / TILE;
+    mctx.strokeStyle = 'rgba(255,255,255,0.6)'; mctx.lineWidth = 1;
+    mctx.strokeRect(Math.max(0, mower.x / TILE - vw / 2) + 0.5, Math.max(0, mower.y / TILE - vh / 2) + 0.5, Math.min(vw, COLS) - 1, Math.min(vh, ROWS) - 1);
     mctx.fillStyle = '#ff3b3b';
     mctx.fillRect(Math.floor(mower.x / TILE) - 1, Math.floor(mower.y / TILE) - 1, 3, 3);
   }
@@ -330,12 +773,13 @@
   }
   let lastHud = 0;
   function updateHud() {
-    const pct = (cutCount / TOTAL) * 100;
-    document.getElementById('pct').textContent = pct.toFixed(1);
-    document.getElementById('barFill').style.width = pct + '%';
-    document.getElementById('cells').textContent = cutCount;
-    document.getElementById('total').textContent = TOTAL;
-    document.getElementById('time').textContent = fmtTime(elapsed);
+    const pct = mowable ? (cutCount / mowable) * 100 : 0;
+    $('pct').textContent = pct.toFixed(1);
+    $('barFill').style.width = pct + '%';
+    $('cells').textContent = cutCount;
+    $('total').textContent = mowable;
+    $('time').textContent = fmtTime(elapsed);
+    $('bumps').textContent = bumps;
   }
 
   // ---------- Main loop ----------
