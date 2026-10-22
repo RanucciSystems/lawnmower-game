@@ -128,7 +128,7 @@
 
 <div id="help" class="panel">
   <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or <kbd>↑</kbd><kbd>←</kbd><kbd>↓</kbd><kbd>→</kbd> to drive ·
-  <kbd>Shift</kbd> boost · <kbd>R</kbd> new field · <kbd>Esc</kbd> settings
+  <kbd>Shift</kbd> boost · <kbd>Space</kbd> drift · <kbd>R</kbd> new field · <kbd>Esc</kbd> settings
 </div>
 
 <div id="done">
@@ -487,7 +487,7 @@
   // Nearest-surface clamp of a point against the field's hard edge plus all obstacles
   function collide() {
     let bumped = false;
-    const speedBefore = Math.abs(mower.vel);
+    const speedBefore = Math.hypot(mower.vx, mower.vy);
     for (const ob of obstacles) {
       const cr = ob.type === 'tree' ? ob.radius * 0.7 : ob.radius;
       const dx = mower.x - ob.x, dy = mower.y - ob.y;
@@ -497,10 +497,11 @@
         mower.x += dx / d * push; mower.y += dy / d * push;
         // Kill the velocity component into the obstacle
         const nx = dx / d, ny = dy / d;
-        const into = Math.cos(mower.angle) * nx + Math.sin(mower.angle) * ny;
-        if (Math.sign(mower.vel) * into < 0) {
+        const vn = mower.vx * nx + mower.vy * ny;      // velocity along the normal (negative = into obstacle)
+        if (vn < 0) {
           if (speedBefore > 60) { bumped = true; ob.hit = 0.3; }
-          mower.vel *= -0.25;
+          mower.vx -= nx * vn * 1.25; mower.vy -= ny * vn * 1.25;   // bounce with some energy loss
+          mower.vel = mower.vx * Math.cos(mower.angle) + mower.vy * Math.sin(mower.angle);
         }
       }
     }
@@ -569,7 +570,7 @@
   }
 
   // ---------- Mower ----------
-  const mower = { x: 0, y: 0, angle: 0, vel: 0, wheelPhase: 0, bladeAngle: 0 };
+  const mower = { x: 0, y: 0, angle: 0, vel: 0, vx: 0, vy: 0, wheelPhase: 0, bladeAngle: 0, drift: 0 };
   const MAX_HP = 100;
   let elapsed = 0, finished = false, broken = false, hp = MAX_HP;
   let prevX = 0, prevY = 0, exhaustTimer = 0, bumps = 0, shake = 0;
@@ -586,7 +587,7 @@
 
   function breakDown() {
     broken = true; finished = true; keys.clear();
-    mower.vel = 0;
+    mower.vel = 0; mower.vx = 0; mower.vy = 0;
     for (let k = 0; k < 24; k++) {
       const a = Math.random() * Math.PI * 2, v = 40 + Math.random() * 120;
       particles.push({ x: mower.x, y: mower.y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 30, life: 0.6 + Math.random() * 0.5,
@@ -603,7 +604,7 @@
 
   function resetGame() {
     resetField();
-    mower.x = START.x; mower.y = START.y; mower.angle = 0; mower.vel = 0;
+    mower.x = START.x; mower.y = START.y; mower.angle = 0; mower.vel = 0; mower.vx = 0; mower.vy = 0; mower.drift = 0;
     prevX = mower.x; prevY = mower.y;
     elapsed = 0; finished = false; broken = false; hp = MAX_HP; bumps = 0; particles.length = 0;
     $('done').style.display = 'none';
@@ -621,6 +622,7 @@
     KeyW: 'up', ArrowUp: 'up', KeyS: 'down', ArrowDown: 'down',
     KeyA: 'left', ArrowLeft: 'left', KeyD: 'right', ArrowRight: 'right',
     ShiftLeft: 'boost', ShiftRight: 'boost',
+    Space: 'drift',
   };
   window.addEventListener('keydown', e => {
     if (e.code === 'KeyR') { resetGame(); return; }
@@ -643,19 +645,46 @@
     if (keys.has('left')) steer -= 1;
     if (keys.has('right')) steer += 1;
 
+    const drifting = keys.has('drift') && !broken;
+    const fx = Math.cos(mower.angle), fy = Math.sin(mower.angle);   // forward axis
+    const rx = -fy, ry = fx;                                          // right axis
+
+    // Split velocity into forward and lateral components
+    let fwd = mower.vx * fx + mower.vy * fy;
+    let lat = mower.vx * rx + mower.vy * ry;
+
+    // Throttle acts along the forward axis
     const maxSpeed = BASE_SPEED * settings.speed * (keys.has('boost') ? BOOST_MULT : 1);
     const accel = BASE_ACCEL * settings.accel;
     const target = throttle * maxSpeed * (throttle < 0 ? 0.6 : 1);
-    if (mower.vel < target) mower.vel = Math.min(target, mower.vel + accel * dt);
-    else if (mower.vel > target) mower.vel = Math.max(target, mower.vel - accel * dt);
+    if (fwd < target) fwd = Math.min(target, fwd + accel * dt);
+    else if (fwd > target) fwd = Math.max(target, fwd - accel * dt);
 
-    const speedFrac = Math.min(1, Math.abs(mower.vel) / (BASE_SPEED * 0.5));
+    // Tyre grip bleeds off lateral slide. Normal: planted. Drifting: slippery.
+    const grip = drifting ? 1.6 : 14;
+    lat *= Math.exp(-grip * dt);
+    // Drifting also scrubs a little forward speed
+    if (drifting) fwd *= Math.exp(-0.35 * dt);
+
+    // Steering: more authority (and a kick of extra rotation) while drifting
+    const speed = Math.hypot(fwd, lat);
+    const speedFrac = Math.min(1, speed / (BASE_SPEED * 0.5));
     const steerAuthority = 0.35 + 0.65 * speedFrac;
-    const dir = (settings.invertRev && mower.vel < -5) ? -1 : 1;
-    mower.angle += steer * BASE_TURN * settings.turn * steerAuthority * dir * dt;
+    const dir = (settings.invertRev && fwd < -5) ? -1 : 1;
+    const turnRate = BASE_TURN * settings.turn * steerAuthority * dir * (drifting ? 1.6 : 1);
+    mower.angle += steer * turnRate * dt;
+    if (drifting && steer !== 0) lat -= steer * 90 * dt * Math.sign(fwd || 1); // throw the tail out
 
-    mower.x += Math.cos(mower.angle) * mower.vel * dt;
-    mower.y += Math.sin(mower.angle) * mower.vel * dt;
+    // Recompose world velocity on the NEW heading (this is what makes the tail swing)
+    const nfx = Math.cos(mower.angle), nfy = Math.sin(mower.angle);
+    mower.vx = nfx * fwd - nfy * lat;
+    mower.vy = nfy * fwd + nfx * lat;
+    mower.vel = fwd;
+    // Visible slip angle for skid marks / effects
+    mower.drift = Math.abs(lat);
+
+    mower.x += mower.vx * dt;
+    mower.y += mower.vy * dt;
 
     // Fence
     const minX = BODY_RADIUS + 6, maxX = WORLD_W - BODY_RADIUS - 6;
@@ -663,14 +692,15 @@
     if (mower.x < minX || mower.x > maxX || mower.y < minY || mower.y > maxY) {
       mower.x = Math.max(minX, Math.min(maxX, mower.x));
       mower.y = Math.max(minY, Math.min(maxY, mower.y));
-      if (Math.abs(mower.vel) > 60) { bumps++; shake = 4; spawnSparks(mower.x, mower.y); takeDamage(Math.abs(mower.vel)); }
-      mower.vel *= 0.2;
+      const sp = Math.hypot(mower.vx, mower.vy);
+      if (sp > 60) { bumps++; shake = 4; spawnSparks(mower.x, mower.y); takeDamage(sp); }
+      mower.vx *= 0.2; mower.vy *= 0.2; mower.vel *= 0.2;
     }
-    const preHit = Math.abs(mower.vel);
+    const preHit = Math.hypot(mower.vx, mower.vy);
     if (collide()) { bumps++; shake = 5; spawnSparks(mower.x + Math.cos(mower.angle) * 12, mower.y + Math.sin(mower.angle) * 12); takeDamage(preHit); }
 
     // Direction bucket from the actual travel heading (reverse flips it)
-    const heading = mower.vel < 0 ? mower.angle + Math.PI : mower.angle;
+    const heading = Math.hypot(mower.vx, mower.vy) > 5 ? Math.atan2(mower.vy, mower.vx) : mower.angle;
     const dirBucket = ((Math.round(heading / (Math.PI / 4)) % 8) + 8) % 8;
 
     const dist = Math.hypot(mower.x - prevX, mower.y - prevY);
@@ -684,12 +714,25 @@
 
     if (dist > 0.5) {
       const cos = Math.cos(mower.angle), sin = Math.sin(mower.angle);
-      tctx.fillStyle = 'rgba(40, 70, 25, 0.10)';
-      for (const side of [-9, 9]) tctx.fillRect(mower.x - sin * side - 1.5, mower.y + cos * side - 1.5, 3, 3);
+      const skid = Math.min(1, mower.drift / 90);
+      // Rear wheels: faint track normally, dark torn-up skid when sliding
+      tctx.fillStyle = skid > 0.15 ? `rgba(50, 35, 15, ${0.18 + 0.5 * skid})` : 'rgba(40, 70, 25, 0.10)';
+      for (const side of [-12, 12]) {
+        const wx = mower.x - cos * 9 - sin * side, wy = mower.y - sin * 9 + cos * side;
+        const w = 3 + skid * 2;
+        tctx.fillRect(wx - w / 2, wy - w / 2, w, w);
+      }
+      if (skid > 0.3 && Math.random() < skid) {
+        // Dust and torn grass kicked up by the rear tyres
+        const side = Math.random() < 0.5 ? -12 : 12;
+        particles.push({ x: mower.x - cos * 9 - sin * side, y: mower.y - sin * 9 + cos * side,
+          vx: -mower.vx * 0.3 + (Math.random() - 0.5) * 40, vy: -mower.vy * 0.3 + (Math.random() - 0.5) * 40 - 10,
+          life: 0.5, maxLife: 0.5, smoke: true, dust: true });
+      }
     }
     prevX = mower.x; prevY = mower.y;
 
-    mower.wheelPhase += mower.vel * dt / 6;
+    mower.wheelPhase += Math.hypot(mower.vx, mower.vy) * Math.sign(mower.vel || 1) * dt / 6;
     mower.bladeAngle += dt * 40;
     shake = Math.max(0, shake - dt * 20);
 
@@ -774,7 +817,10 @@
       ctx.fillStyle = '#777'; ctx.fillRect(x - 1, y - 1, 2, 2);
     };
     wheel(-9, -12, 8, 5); wheel(-9, 12, 8, 5);
-    wheel(11, -10, 5, 4);  wheel(11, 10, 5, 4);
+    const steerVis = (keys.has('right') ? 1 : 0) - (keys.has('left') ? 1 : 0);
+    for (const sy of [-10, 10]) {
+      ctx.save(); ctx.translate(11, sy); ctx.rotate(steerVis * 0.5); wheel(0, 0, 5, 4); ctx.restore();
+    }
 
     // Chassis and hood
     ctx.fillStyle = '#b71c1c'; ctx.fillRect(-14, -8, 26, 16);
@@ -842,7 +888,7 @@
     for (const p of particles) {
       if (!p.smoke) continue;
       const a = Math.max(0, Math.min(1, p.life / p.maxLife));
-      ctx.fillStyle = p.dark ? `rgba(40,40,40,${0.5 * a})` : `rgba(200,200,200,${0.35 * a})`;
+      ctx.fillStyle = p.dust ? `rgba(150,130,80,${0.4 * a})` : p.dark ? `rgba(40,40,40,${0.5 * a})` : `rgba(200,200,200,${0.35 * a})`;
       ctx.beginPath(); ctx.arc(p.x - camX, p.y - camY, 2 + (1 - a) * (p.dark ? 7 : 4), 0, Math.PI * 2); ctx.fill();
     }
 

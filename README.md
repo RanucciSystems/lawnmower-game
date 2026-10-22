@@ -16,6 +16,7 @@ Open `index.html` in any modern browser. No build step or server required.
 | `S` / `↓` | Reverse |
 | `A` / `←`, `D` / `→` | Steer |
 | `Shift` | Boost |
+| `Space` | Drift (hold while turning to slide the back end out) |
 | `R` | Restart with a freshly generated field |
 | `Esc` or ⚙ | Open settings |
 
@@ -26,6 +27,12 @@ Mow 100% of the field to finish. Your time and bump count are shown when you cle
 Each field is randomly generated with a pond, trees, rocks and hay bales. Running
 into one at speed counts as a bump and knocks you back, so steer around them.
 Patches under obstacles don't need cutting.
+
+## Drifting
+
+Hold `Space` while turning and the tyres lose grip: the mower slides sideways,
+leaves dark skid marks, kicks up dust and takes a wider line. Great fun, but
+sliding into a rock still counts as a bump.
 
 ## Mower health
 
