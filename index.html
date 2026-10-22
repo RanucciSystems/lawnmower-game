@@ -243,6 +243,12 @@
   const trackCanvas = document.createElement('canvas');    // tire tracks
   trackCanvas.width = WORLD_W; trackCanvas.height = WORLD_H;
   const tctx = trackCanvas.getContext('2d');
+  const cutCanvas = document.createElement('canvas');      // smooth cut-grass layer painted along the mower path
+  cutCanvas.width = WORLD_W; cutCanvas.height = WORLD_H;
+  const cctx = cutCanvas.getContext('2d');
+  const shadeCanvas = document.createElement('canvas');    // large-scale light/dark patches shared by tall and cut grass
+  shadeCanvas.width = WORLD_W; shadeCanvas.height = WORLD_H;
+  const sctx = shadeCanvas.getContext('2d');
   const propCanvas = document.createElement('canvas');     // obstacles at ground level
   propCanvas.width = WORLD_W; propCanvas.height = WORLD_H;
   const pctx = propCanvas.getContext('2d');
@@ -260,6 +266,39 @@
     const align = Math.cos(a - LIGHT_ANGLE);      // 1 = towards light, -1 = away
     DIR_SHADE[d] = 1.0 + 0.11 * align;            // ~0.89 .. 1.11
   }
+
+  // One repeating cut-grass texture per heading, with grain lines running along the pass
+  const CUT_PATTERNS = [];
+  (function buildCutPatterns() {
+    const SZ = 48;
+    for (let d = 0; d < 8; d++) {
+      const t = document.createElement('canvas'); t.width = SZ; t.height = SZ;
+      const g = t.getContext('2d');
+      const shade = DIR_SHADE[d];
+      g.fillStyle = mix(PALETTE_CUT[1], shade); g.fillRect(0, 0, SZ, SZ);
+      // speckle
+      for (let k = 0; k < 90; k++) {
+        const h = hash(k * 31 + d * 977);
+        g.fillStyle = (h & 1) ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.07)';
+        g.fillRect(h % SZ, (h >> 6) % SZ, 1 + ((h >> 12) & 1), 1);
+      }
+      // grain lines along the heading, drawn as a repeating stripe set
+      const a = (d / 8) * Math.PI * 2;
+      g.save(); g.translate(SZ / 2, SZ / 2); g.rotate(a);
+      g.strokeStyle = shade > 1 ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.12)'; g.lineWidth = 1;
+      for (let o = -SZ; o <= SZ; o += 4) {
+        g.beginPath(); g.moveTo(-SZ, o + 0.5); g.lineTo(SZ, o + 0.5); g.stroke();
+      }
+      g.restore();
+      // the odd clipping
+      for (let k = 0; k < 6; k++) {
+        const h = hash(k * 131 + d * 17);
+        g.fillStyle = 'rgba(215,235,130,0.5)'; g.fillRect(h % SZ, (h >> 7) % SZ, 2, 1);
+      }
+      CUT_PATTERNS[d] = cctx.createPattern(t, 'repeat');
+    }
+  })();
+  let shadePattern = null;
 
   function drawCell(c, r) {
     const i = r * COLS + c;
@@ -286,21 +325,33 @@
       else if (f === 1) { fctx.fillStyle = '#f4f4f4'; fctx.fillRect(x + 4, y + 1, 2, 2); fctx.fillStyle = '#e8c33a'; fctx.fillRect(x + 4, y + 1, 1, 1); }
       else if (f === 2) { fctx.fillStyle = '#c86bd8'; fctx.fillRect(x + 1, y + 4, 2, 2); }
       else if (f === 3 && h > 0.6) { fctx.fillStyle = '#7a4e2a'; fctx.fillRect(x + 3, y + 5, 1, 3); fctx.fillStyle = '#b8862b'; fctx.fillRect(x + 2, y + 3, 3, 2); }
-    } else {
-      const shade = DIR_SHADE[cutDir[i]];
-      const base = PALETTE_CUT[Math.min(2, Math.floor(h * 3))];
-      fctx.fillStyle = mix(base, (0.97 + (s % 3) * 0.015) * shade);
-      fctx.fillRect(x, y, TILE, TILE);
-      // Fine grain lines following the cut direction
-      const d = cutDir[i];
-      fctx.fillStyle = shade > 1 ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.10)';
-      if (d === 0 || d === 4) fctx.fillRect(x, y + (s % TILE), TILE, 1);            // horizontal pass
-      else if (d === 2 || d === 6) fctx.fillRect(x + (s % TILE), y, 1, TILE);       // vertical pass
-      else { const o = s % TILE; fctx.fillRect(x + o, y + ((d === 1 || d === 5) ? o : TILE - 1 - o), 2, 1); }
-      fctx.fillStyle = 'rgba(0,0,0,0.05)';
-      fctx.fillRect(x + (s % TILE), y + ((s >> 3) % TILE), 1, 1);
-      if (s % 11 === 0) { fctx.fillStyle = 'rgba(215,235,130,0.55)'; fctx.fillRect(x + (s % 6), y + (s % 5), 2, 1); }
     }
+    // Cut cells are not drawn here: the smooth cut layer is painted along the mower's path instead.
+  }
+
+  // Paint a smooth, anti-aliased circle of cut grass for the current heading.
+  function paintCut(wx, wy, dirBucket) {
+    cctx.beginPath(); cctx.arc(wx, wy, DECK_RADIUS, 0, Math.PI * 2);
+    cctx.fillStyle = CUT_PATTERNS[dirBucket]; cctx.fill();
+    cctx.fillStyle = shadePattern; cctx.fill();       // world-aligned light/dark patches
+  }
+
+  function buildShadeLayer() {
+    const img = sctx.createImageData(COLS, ROWS);
+    const d = img.data;
+    for (let i = 0; i < state.length; i++) {
+      const h = height[i];
+      // dark where the grass is low, faint warm light where it is high
+      const dark = Math.max(0, 0.5 - h) * 0.36, light = Math.max(0, h - 0.5) * 0.22;
+      if (dark > light) { d[i * 4] = 0; d[i * 4 + 1] = 10; d[i * 4 + 2] = 0; d[i * 4 + 3] = Math.round(dark * 255); }
+      else { d[i * 4] = 255; d[i * 4 + 1] = 250; d[i * 4 + 2] = 200; d[i * 4 + 3] = Math.round(light * 255); }
+    }
+    const small = document.createElement('canvas'); small.width = COLS; small.height = ROWS;
+    small.getContext('2d').putImageData(img, 0, 0);
+    sctx.clearRect(0, 0, WORLD_W, WORLD_H);
+    sctx.imageSmoothingEnabled = true;
+    sctx.drawImage(small, 0, 0, WORLD_W, WORLD_H);   // upscale with smoothing for soft blotches
+    shadePattern = cctx.createPattern(shadeCanvas, 'no-repeat');
   }
 
   // ---------- Obstacles ----------
@@ -468,6 +519,8 @@
     for (let i = 0; i < state.length; i++) if (state[i] === TALL) mowable++;
     cutCount = 0;
     for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) drawCell(c, r);
+    buildShadeLayer();
+    cctx.clearRect(0, 0, WORLD_W, WORLD_H);
     drawProps();
     tctx.clearRect(0, 0, WORLD_W, WORLD_H);
   }
@@ -508,9 +561,10 @@
         const nx = Math.max(c * TILE, Math.min(wx, c * TILE + TILE));
         const ny = Math.max(r * TILE, Math.min(wy, r * TILE + TILE));
         const dx = nx - wx, dy = ny - wy;
-        if (dx * dx + dy * dy <= r2) { state[i] = CUT; cutDir[i] = dirBucket; cutCount++; drawCell(c, r); cutAny = true; }
+        if (dx * dx + dy * dy <= r2) { state[i] = CUT; cutDir[i] = dirBucket; cutCount++; cutAny = true; }
       }
     }
+    paintCut(wx, wy, dirBucket);
     return cutAny;
   }
 
@@ -620,7 +674,7 @@
     const dirBucket = ((Math.round(heading / (Math.PI / 4)) % 8) + 8) % 8;
 
     const dist = Math.hypot(mower.x - prevX, mower.y - prevY);
-    const steps = Math.max(1, Math.ceil(dist / (DECK_RADIUS * 0.5)));
+    const steps = Math.max(1, Math.ceil(dist / 2));
     let cutAny = false;
     for (let s = 1; s <= steps; s++) {
       const t = s / steps;
@@ -764,6 +818,7 @@
 
     ctx.fillStyle = '#4a3521'; ctx.fillRect(0, 0, vw, vh);
     ctx.drawImage(fieldCanvas, -camX, -camY);
+    ctx.drawImage(cutCanvas, -camX, -camY);
     ctx.drawImage(trackCanvas, -camX, -camY);
     ctx.drawImage(propCanvas, -camX, -camY);
     drawFence(camX, camY, vw, vh);
