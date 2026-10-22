@@ -27,6 +27,13 @@ Each field is randomly generated with a pond, trees, rocks and hay bales. Runnin
 into one at speed counts as a bump and knocks you back, so steer around them.
 Patches under obstacles don't need cutting.
 
+## Mower health
+
+Every bump damages the mower, and harder hits do more damage. The health bar in
+the HUD drops from green to yellow to red, the mower picks up dents and starts
+belching black smoke, and at zero it breaks down. That's game over: a screen
+shows how much you cleared and a Restart button starts a fresh field.
+
 ## Mowing stripes
 
 Cut grass is shaded by the direction you were driving when you cut it, so mowing

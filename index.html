@@ -30,6 +30,11 @@
   #hud .pct { font-size: 28px; font-weight: 700; color: var(--accent); }
   #bar { height: 8px; background: rgba(255,255,255,0.1); border-radius: 4px; overflow: hidden; margin: 6px 0 4px; }
   #barFill { height: 100%; width: 0; background: var(--accent); transition: width .15s linear; }
+  #hpWrap { margin-top: 8px; }
+  #hpBar { height: 10px; background: rgba(255,255,255,0.1); border-radius: 5px; overflow: hidden; margin-top: 4px; }
+  #hpFill { height: 100%; width: 100%; background: #6fd35a; transition: width .2s ease, background .3s; }
+  #hud.hurt { animation: hurt .3s; }
+  @keyframes hurt { 0% { box-shadow: 0 0 0 2px #ff5252; } 100% { box-shadow: none; } }
   #help {
     position: fixed; bottom: 12px; left: 12px; padding: 8px 12px;
     font-size: 12px; opacity: .85; pointer-events: none;
@@ -68,6 +73,7 @@
   }
   #done .card { padding: 28px 36px; border-radius: 14px; }
   #done h1 { margin: 0 0 8px; color: var(--accent); }
+  #done.over h1 { color: #ff6b6b; }
   #done button {
     margin-top: 14px; padding: 10px 18px; font-size: 16px; cursor: pointer;
     background: var(--accent); color: #142; border: 0; border-radius: 8px; font-weight: 700;
@@ -88,6 +94,10 @@
   <div id="bar"><div id="barFill"></div></div>
   <div><span id="cells">0</span> / <span id="total">0</span> patches</div>
   <div>Time <span id="time">0:00</span> · Bumps <span id="bumps">0</span></div>
+  <div id="hpWrap">
+    <div class="row" style="display:flex;justify-content:space-between"><span>Mower health</span><span><span id="hp">100</span>%</span></div>
+    <div id="hpBar"><div id="hpFill"></div></div>
+  </div>
 </div>
 
 <div id="gear" class="panel" title="Settings (Esc)">⚙</div>
@@ -123,8 +133,8 @@
 
 <div id="done">
   <div class="card panel">
-    <h1>Field cleared!</h1>
-    <div>You mowed the whole farm in <strong id="finalTime">0:00</strong> with <strong id="finalBumps">0</strong> bumps.</div>
+    <h1 id="doneTitle">Field cleared!</h1>
+    <div id="doneMsg">You mowed the whole farm in <strong id="finalTime">0:00</strong> with <strong id="finalBumps">0</strong> bumps.</div>
     <button id="again">Mow again</button>
   </div>
 </div>
@@ -426,6 +436,7 @@
   // Nearest-surface clamp of a point against the field's hard edge plus all obstacles
   function collide() {
     let bumped = false;
+    const speedBefore = Math.abs(mower.vel);
     for (const ob of obstacles) {
       const cr = ob.type === 'tree' ? ob.radius * 0.7 : ob.radius;
       const dx = mower.x - ob.x, dy = mower.y - ob.y;
@@ -437,7 +448,7 @@
         const nx = dx / d, ny = dy / d;
         const into = Math.cos(mower.angle) * nx + Math.sin(mower.angle) * ny;
         if (Math.sign(mower.vel) * into < 0) {
-          if (Math.abs(mower.vel) > 60) { bumped = true; ob.hit = 0.3; }
+          if (speedBefore > 60) { bumped = true; ob.hit = 0.3; }
           mower.vel *= -0.25;
         }
       }
@@ -505,14 +516,47 @@
 
   // ---------- Mower ----------
   const mower = { x: 0, y: 0, angle: 0, vel: 0, wheelPhase: 0, bladeAngle: 0 };
-  let elapsed = 0, finished = false, prevX = 0, prevY = 0, exhaustTimer = 0, bumps = 0, shake = 0;
+  const MAX_HP = 100;
+  let elapsed = 0, finished = false, broken = false, hp = MAX_HP;
+  let prevX = 0, prevY = 0, exhaustTimer = 0, bumps = 0, shake = 0;
+
+  function takeDamage(impactSpeed) {
+    if (broken) return;
+    // 8 damage for a gentle tap, up to ~30 for a flat-out boosted hit
+    const dmg = Math.round(8 + 22 * Math.min(1, Math.max(0, (impactSpeed - 60) / 230)));
+    hp = Math.max(0, hp - dmg);
+    updateHud();
+    $('hud').classList.remove('hurt'); void $('hud').offsetWidth; $('hud').classList.add('hurt');
+    if (hp <= 0) breakDown();
+  }
+
+  function breakDown() {
+    broken = true; finished = true; keys.clear();
+    mower.vel = 0;
+    for (let k = 0; k < 24; k++) {
+      const a = Math.random() * Math.PI * 2, v = 40 + Math.random() * 120;
+      particles.push({ x: mower.x, y: mower.y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 30, life: 0.6 + Math.random() * 0.5,
+        c: Math.random() < 0.5 ? '#ff7043' : '#555' });
+    }
+    shake = 10;
+    const pct = mowable ? (cutCount / mowable) * 100 : 0;
+    $('done').classList.add('over');
+    $('doneTitle').textContent = 'Mower broke down!';
+    $('doneMsg').innerHTML = `Too many bumps. You cleared <strong>${pct.toFixed(1)}%</strong> of the field in <strong>${fmtTime(elapsed)}</strong> after <strong>${bumps}</strong> bumps.`;
+    $('again').textContent = 'Restart';
+    $('done').style.display = 'grid';
+  }
 
   function resetGame() {
     resetField();
     mower.x = START.x; mower.y = START.y; mower.angle = 0; mower.vel = 0;
     prevX = mower.x; prevY = mower.y;
-    elapsed = 0; finished = false; bumps = 0; particles.length = 0;
+    elapsed = 0; finished = false; broken = false; hp = MAX_HP; bumps = 0; particles.length = 0;
     $('done').style.display = 'none';
+    $('done').classList.remove('over');
+    $('doneTitle').textContent = 'Field cleared!';
+    $('doneMsg').innerHTML = 'You mowed the whole farm in <strong id="finalTime">0:00</strong> with <strong id="finalBumps">0</strong> bumps.';
+    $('again').textContent = 'Mow again';
     cutAt(mower.x, mower.y, 0);
     updateHud();
   }
@@ -539,6 +583,7 @@
     if (!finished) elapsed += dt;
 
     let throttle = 0, steer = 0;
+    if (broken) keys.clear();
     if (keys.has('up')) throttle += 1;
     if (keys.has('down')) throttle -= 1;
     if (keys.has('left')) steer -= 1;
@@ -564,10 +609,11 @@
     if (mower.x < minX || mower.x > maxX || mower.y < minY || mower.y > maxY) {
       mower.x = Math.max(minX, Math.min(maxX, mower.x));
       mower.y = Math.max(minY, Math.min(maxY, mower.y));
-      if (Math.abs(mower.vel) > 60) { bumps++; shake = 4; spawnSparks(mower.x, mower.y); }
+      if (Math.abs(mower.vel) > 60) { bumps++; shake = 4; spawnSparks(mower.x, mower.y); takeDamage(Math.abs(mower.vel)); }
       mower.vel *= 0.2;
     }
-    if (collide()) { bumps++; shake = 5; spawnSparks(mower.x + Math.cos(mower.angle) * 12, mower.y + Math.sin(mower.angle) * 12); }
+    const preHit = Math.abs(mower.vel);
+    if (collide()) { bumps++; shake = 5; spawnSparks(mower.x + Math.cos(mower.angle) * 12, mower.y + Math.sin(mower.angle) * 12); takeDamage(preHit); }
 
     // Direction bucket from the actual travel heading (reverse flips it)
     const heading = mower.vel < 0 ? mower.angle + Math.PI : mower.angle;
@@ -595,10 +641,13 @@
 
     exhaustTimer -= dt;
     if (exhaustTimer <= 0) {
-      exhaustTimer = Math.abs(mower.vel) > 20 ? 0.08 : 0.25;
-      const bx = mower.x - Math.cos(mower.angle) * 14, by = mower.y - Math.sin(mower.angle) * 14;
+      const damage = 1 - hp / MAX_HP;
+      exhaustTimer = (Math.abs(mower.vel) > 20 || broken ? 0.08 : 0.25) * (1 - damage * 0.6);
+      const fromEngine = broken || (damage > 0.5 && Math.random() < damage);
+      const ox = fromEngine ? 6 : -14;
+      const bx = mower.x + Math.cos(mower.angle) * ox, by = mower.y + Math.sin(mower.angle) * ox;
       particles.push({ x: bx, y: by, vx: -Math.cos(mower.angle) * 20 + (Math.random() - 0.5) * 10,
-        vy: -Math.sin(mower.angle) * 20 - 8, life: 0.7, smoke: true });
+        vy: -Math.sin(mower.angle) * 20 - 8, life: 0.7 + damage * 0.6, maxLife: 0.7 + damage * 0.6, smoke: true, dark: broken || fromEngine });
     }
 
     for (let i = particles.length - 1; i >= 0; i--) {
@@ -678,6 +727,13 @@
     ctx.fillStyle = '#e53935'; ctx.fillRect(-13, -7, 24, 13);
     ctx.fillStyle = 'rgba(255,255,255,0.18)'; ctx.fillRect(-13, -7, 24, 2);
     ctx.fillStyle = '#d32f2f'; ctx.fillRect(4, -6, 9, 12);
+    // Damage: dents and scorch marks appear as health drops
+    const dmgLevel = Math.floor((1 - hp / MAX_HP) * 5);
+    ctx.fillStyle = '#5a1010';
+    if (dmgLevel >= 1) ctx.fillRect(7, -5, 3, 2);
+    if (dmgLevel >= 2) ctx.fillRect(-11, 4, 4, 2);
+    if (dmgLevel >= 3) { ctx.fillRect(1, 5, 2, 2); ctx.fillStyle = '#333'; ctx.fillRect(5, -3, 2, 6); }
+    if (dmgLevel >= 4) { ctx.fillStyle = '#222'; ctx.fillRect(8, -6, 5, 3); ctx.fillStyle = '#ff9800'; ctx.fillRect(6, -1, 2, 2); }
     ctx.fillStyle = '#2b2b2b';
     for (let k = -4; k <= 4; k += 2) ctx.fillRect(10, k, 2, 1);
     ctx.fillStyle = '#fff59d'; ctx.fillRect(12, -5, 2, 2); ctx.fillRect(12, 3, 2, 2);
@@ -730,9 +786,9 @@
 
     for (const p of particles) {
       if (!p.smoke) continue;
-      const a = Math.max(0, p.life / 0.7);
-      ctx.fillStyle = `rgba(200,200,200,${0.35 * a})`;
-      ctx.beginPath(); ctx.arc(p.x - camX, p.y - camY, 2 + (1 - a) * 4, 0, Math.PI * 2); ctx.fill();
+      const a = Math.max(0, Math.min(1, p.life / p.maxLife));
+      ctx.fillStyle = p.dark ? `rgba(40,40,40,${0.5 * a})` : `rgba(200,200,200,${0.35 * a})`;
+      ctx.beginPath(); ctx.arc(p.x - camX, p.y - camY, 2 + (1 - a) * (p.dark ? 7 : 4), 0, Math.PI * 2); ctx.fill();
     }
 
     drawCanopies(camX, camY);
@@ -780,6 +836,10 @@
     $('total').textContent = mowable;
     $('time').textContent = fmtTime(elapsed);
     $('bumps').textContent = bumps;
+    $('hp').textContent = hp;
+    const fill = $('hpFill');
+    fill.style.width = hp + '%';
+    fill.style.background = hp > 60 ? '#6fd35a' : hp > 30 ? '#f0c419' : '#ff5252';
   }
 
   // ---------- Main loop ----------
